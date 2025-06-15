@@ -8,6 +8,10 @@ MODEL_PATH       = "./models/Qwen3-8B-llama-epoch8"
 DATA_PATH        = "./data/enhanced_test1.json"
 FORMAT_DATA_PATH = "./data/format_enhanced_test1.json"
 SAVE_PATH        = "./data/result_epoch8_enhanced.json"
+batch_size = 4      # 批处理大小
+M = 5               # 平行推理次数
+K = 3               # K-shot
+max_retries = 3     # 最大重试次数
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # 加载模型和Tokenizer
 model = AutoModelForCausalLM.from_pretrained(
@@ -52,27 +56,45 @@ def extract_output(generated_text):
     pattern = r"###输出:\s*(.*?)(\[END\])"
     match = re.search(pattern, generated_text, re.DOTALL)
     return match.group(1).strip() + " [END]" if match else ""
-batch_size = 4      # 批处理大小
-num_infer = 5       # 平行推理次数
 results = []
 for i in tqdm(range(0, len(format_test_dataset), batch_size), desc="Inference", unit="batch"):
     batch_texts = [item["input"] for item in format_test_dataset[i: i + batch_size]]
-    # 平行推理 为每个样本生成num_inferences个输出
-    batch_outputs = generate_multiple_outputs(batch_texts, num_infer)
-    for j, outputs in enumerate(batch_outputs):
-        # 提取结果 统计分布 选择出现次数最多的结果
-        extracted_outputs = [extract_output(text) for text in outputs]
-        output_counter = Counter(extracted_outputs)
-        most_common = output_counter.most_common(1)
-        final_output, count = most_common[0] if most_common else ("", 0)
-        # 计算一致性比例
-        consist_ratio = count / num_infer
+    for j in range(len(batch_texts)):
+        retry_count = 0
+        final_output = ""
+        all_outputs = []
+        consist_ratio = 0.0
+        current_text = batch_texts[j]
+        while retry_count <= max_retries:
+            # 生成M个输出
+            current_outputs = generate_multiple_outputs([current_text], M)[0]
+            extracted_outputs = [extract_output(text) for text in current_outputs]
+            all_outputs.extend(extracted_outputs)
+            # 统计当前轮次的输出分布
+            output_counter = Counter(extracted_outputs)
+            # 检查是否有输出达到阈值K
+            for output, count in output_counter.most_common():
+                if count >= K:
+                    final_output = output
+                    consist_ratio = count / M
+                    break
+            # 如果找到满足条件的输出，退出循环
+            if final_output: break
+            retry_count += 1
+        # 如果所有重试后仍无满足条件的输出，则选择出现次数最多的
+        if not final_output and all_outputs:
+            output_counter = Counter(all_outputs)
+            most_common = output_counter.most_common(1)
+            if most_common:
+                final_output, count = most_common[0]
+                consist_ratio = count / (M * (retry_count + 1))
+        # 记录结果
         results.append({
-            "id": test_dataset[i + j]["id"],
-            "content": test_dataset[i + j]["content"],
+            "id": format_test_dataset[i + j]["id"],
+            "content": format_test_dataset[i + j]["content"],
             "output": final_output,
             "consist_ratio": consist_ratio,
-            "all_outputs": extracted_outputs  # 保存所有推理结果用于分析原因
+            "all_outputs": all_outputs,
         })
 with open(SAVE_PATH, "w", encoding="utf-8") as f:
     json.dump(results, f, ensure_ascii=False, indent=4)
