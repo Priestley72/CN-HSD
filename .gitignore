@@ -1,0 +1,14 @@
+# IDE 相关
+.idea/
+.vscode/
+*.swp
+
+# Python 缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 其他系统/环境文件
+.DS_Store
+.env
+*.log

@@ -1,0 +1,8 @@
+torch
+unsloth
+scikit_learn
+sentence_transformers
+transformers
+datasets
+trl
+tqdm
